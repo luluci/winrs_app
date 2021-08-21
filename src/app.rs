@@ -5,7 +5,7 @@ use bindings::{
 		RECT,
 	},
 	Windows::Win32::UI::WindowsAndMessaging::{
-		GetMessageW, PeekMessageW,
+		GetMessageW, PeekMessageW, SendMessageW, 
 		CreateWindowExW, DefWindowProcW, DispatchMessageW, PostQuitMessage,
 		RegisterClassW, MessageBoxW, TranslateMessage, 
 		GetClientRect, MoveWindow, 
@@ -13,7 +13,7 @@ use bindings::{
 		// Apis
 		WM_DESTROY, WM_PAINT, WM_CREATE, WM_QUIT, WM_SIZE, 
 		WINDOW_STYLE,
-		WS_OVERLAPPEDWINDOW, WS_VISIBLE, WS_CHILDWINDOW, WS_CHILD, WS_BORDER, WS_VSCROLL,
+		WS_OVERLAPPEDWINDOW, WS_VISIBLE, WS_CHILDWINDOW, WS_CHILD, WS_BORDER, WS_VSCROLL, WM_SETFONT, 
 		WS_CLIPCHILDREN, WS_CLIPSIBLINGS, 
 		ES_AUTOHSCROLL, ES_MULTILINE, 
 		WINDOW_EX_STYLE,
@@ -38,6 +38,8 @@ use bindings::{
 		HBRUSH, GET_STOCK_OBJECT_FLAGS,
 		DKGRAY_BRUSH,
 		HGDIOBJ,
+		HFONT, CreateFontW, FW_NORMAL, SHIFTJIS_CHARSET, OUT_TT_PRECIS, CLIP_DEFAULT_PRECIS,  
+		DEFAULT_QUALITY, FF_MODERN, 
 	},
 };
 use once_cell::sync::OnceCell;
@@ -112,6 +114,9 @@ struct App {
 	coord: winrs_util::WndCoord,
 	// ChildWindow: EditCtrl
 	hwnd_edit: HWND,
+	// Font
+	hfont: HFONT,
+	font_face: winrs_util::WSTR,
 }
 
 impl App {
@@ -127,6 +132,9 @@ impl App {
 			coord: winrs_util::WndCoord::new(0,0,0,0),
 			// ChildWindow: EditCtrl
 			hwnd_edit: HWND::default(),
+			// Font
+			hfont: HFONT::default(),
+			font_face: winrs_util::WSTR::new("Meiryo UI\0"),
 		}
 	}
 
@@ -136,9 +144,31 @@ impl App {
 			self.hinst = GetModuleHandleW(PWSTR::NULL);
 		}
 		//
+		self.make_font();
 		self.make_wndclass();
 		self.make_coord();
 		self.init_window();
+	}
+
+	fn make_font(&mut self) {
+		unsafe {
+			self.hfont = CreateFontW(
+				18,
+				0,
+				0,
+				0,
+				FW_NORMAL as i32,
+				0,
+				0,
+				0,
+				SHIFTJIS_CHARSET,
+				OUT_TT_PRECIS,
+				CLIP_DEFAULT_PRECIS,
+				DEFAULT_QUALITY,
+				FF_MODERN,
+				self.font_face.as_pwstr(),
+			);
+		}
 	}
 
 	fn make_wndclass(&mut self) {
@@ -266,6 +296,8 @@ impl App {
 				(*cs).hInstance,
 				std::ptr::null_mut(),
 			);
+			// EditControlにフォント指定
+			SendMessageW(self.hwnd_edit, WM_SETFONT, WPARAM(self.hfont.0 as usize), LPARAM(1));
 		}
 
 		LRESULT(0)

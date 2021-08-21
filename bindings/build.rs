@@ -4,13 +4,13 @@ fn main() {
 	// https://crates.io/crates/windows
 	windows::build!(
 		Windows::Win32::UI::WindowsAndMessaging::{
-			GetMessageW, PeekMessageW,
+			GetMessageW, PeekMessageW, SendMessageW, 
 			CreateWindowExW, DefWindowProcW, DispatchMessageW, PostQuitMessage,
 			RegisterClassW, MessageBoxW, TranslateMessage,
 			GetClientRect, MoveWindow, 
 			MSG, WNDCLASSW, HMENU, CREATESTRUCTW, 
 			CW_USEDEFAULT,
-			WM_DESTROY, WM_PAINT, WM_CREATE, WM_QUIT, WM_SIZE, 
+			WM_DESTROY, WM_PAINT, WM_CREATE, WM_QUIT, WM_SIZE, WM_SETFONT, 
 			LoadCursorW, IDC_ARROW,
 			WINDOW_STYLE, WINDOW_EX_STYLE,
 			ES_AUTOHSCROLL, ES_MULTILINE,
@@ -33,6 +33,7 @@ fn main() {
 			ValidateRect, GetStockObject, UpdateWindow,
 			HBRUSH, GET_STOCK_OBJECT_FLAGS,
 			HGDIOBJ,
+			HFONT, CreateFontW, FW_NORMAL, SHIFTJIS_CHARSET, FONT_OUTPUT_PRECISION, FONT_CLIP_PRECISION, FONT_QUALITY, FONT_PITCH_AND_FAMILY, 
 		},
 	);
 }
