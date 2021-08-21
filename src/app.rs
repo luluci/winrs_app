@@ -1,19 +1,21 @@
 
+use std::ffi::c_void;
+
 use bindings::{
 	Windows::Win32::Foundation::{
 		HWND, LPARAM, WPARAM, HINSTANCE, LRESULT, PWSTR,
 		RECT,
 	},
 	Windows::Win32::UI::WindowsAndMessaging::{
-		GetMessageW, PeekMessageW, SendMessageW, 
+		GetMessageW, PeekMessageW, SendMessageW,
 		CreateWindowExW, DefWindowProcW, DispatchMessageW, PostQuitMessage,
-		RegisterClassW, MessageBoxW, TranslateMessage, 
+		RegisterClassW, MessageBoxW, TranslateMessage, SendDlgItemMessageW, 
 		GetClientRect, MoveWindow, 
 		MSG, WNDCLASSW, HMENU, CREATESTRUCTW, CW_USEDEFAULT,
 		// Apis
-		WM_DESTROY, WM_PAINT, WM_CREATE, WM_QUIT, WM_SIZE, 
+		WM_DESTROY, WM_PAINT, WM_CREATE, WM_QUIT, WM_SIZE, WM_GETTEXTLENGTH, 
 		WINDOW_STYLE,
-		WS_OVERLAPPEDWINDOW, WS_VISIBLE, WS_CHILDWINDOW, WS_CHILD, WS_BORDER, WS_VSCROLL, WM_SETFONT, 
+		WS_OVERLAPPEDWINDOW, WS_VISIBLE, WS_CHILDWINDOW, WS_CHILD, WS_BORDER, WS_VSCROLL, WM_SETFONT, WM_DROPFILES, 
 		WS_CLIPCHILDREN, WS_CLIPSIBLINGS, 
 		ES_AUTOHSCROLL, ES_MULTILINE, 
 		WINDOW_EX_STYLE,
@@ -25,17 +27,25 @@ use bindings::{
 		LoadCursorW, IDC_ARROW,
 		PEEK_MESSAGE_REMOVE_TYPE,
 		PM_REMOVE, 
+		SetWindowLongPtrW, CallWindowProcW,
+		GWLP_WNDPROC, 
+		WNDPROC, 
 	},
 	Windows::Win32::UI::Controls::{
 		InitCommonControlsEx,
-		INITCOMMONCONTROLSEX, INITCOMMONCONTROLSEX_ICC
+		INITCOMMONCONTROLSEX, INITCOMMONCONTROLSEX_ICC, 
+		EM_SETSEL, EM_REPLACESEL, 
+	},
+	Windows::Win32::UI::Shell::{
+		SetWindowSubclass, DefSubclassProc, 
+		HDROP, DragQueryFileW, DragFinish, 
 	},
 	Windows::Win32::System::LibraryLoader::{
 		GetModuleHandleW
 	},
 	Windows::Win32::Graphics::Gdi::{
 		ValidateRect, GetStockObject, UpdateWindow,
-		HBRUSH, GET_STOCK_OBJECT_FLAGS,
+		HBRUSH, GET_STOCK_OBJECT_FLAGS, DeleteObject, 
 		DKGRAY_BRUSH,
 		HGDIOBJ,
 		HFONT, CreateFontW, FW_NORMAL, SHIFTJIS_CHARSET, OUT_TT_PRECIS, CLIP_DEFAULT_PRECIS,  
@@ -44,7 +54,7 @@ use bindings::{
 };
 use once_cell::sync::OnceCell;
 
-use crate::winrs_util;
+use crate::{app::resource::UTF16_CRLF, winrs_util};
 use crate::winrs_util::WSTRTrait;
 
 // static resource
@@ -59,12 +69,21 @@ mod resource {
 	// EDIT window info
 	pub static EDIT_CLASS_NAME: OnceCell<winrs_util::WSTR> = OnceCell::new();
 	pub static EDIT_DEF_STR: OnceCell<winrs_util::WSTR> = OnceCell::new();
+	// 
+	pub static UTF16_CR: OnceCell<u16> = OnceCell::new();
+	pub static UTF16_LF: OnceCell<u16> = OnceCell::new();
+	pub static UTF16_CRLF: OnceCell<winrs_util::WSTR> = OnceCell::new();
+	pub static UTF16_NULL: OnceCell<u16> = OnceCell::new();
 
 	pub fn init() {
 		CLASS_NAME.set(winrs_util::WSTR::new("MyWindowClass\0"));
 		WND_TITLE.set(winrs_util::WSTR::new("Win32 App\0"));
 		EDIT_CLASS_NAME.set(winrs_util::WSTR::new("EDIT\0"));
 		EDIT_DEF_STR.set(winrs_util::WSTR::new("初期テキスト\0"));
+		UTF16_CR.set("\r".encode_utf16().next().unwrap());
+		UTF16_LF.set("\n".encode_utf16().next().unwrap());
+		UTF16_CRLF.set(winrs_util::WSTR::new("\r\n\0"));
+		UTF16_NULL.set("\0".encode_utf16().next().unwrap());
 	}
 }
 // dynamic resource
@@ -117,6 +136,8 @@ struct App {
 	// Font
 	hfont: HFONT,
 	font_face: winrs_util::WSTR,
+	// Drag & Drop
+	dd_buff: [u16;256],
 }
 
 impl App {
@@ -135,6 +156,14 @@ impl App {
 			// Font
 			hfont: HFONT::default(),
 			font_face: winrs_util::WSTR::new("Meiryo UI\0"),
+			// Drag & Drop
+			dd_buff: [0; 256],
+		}
+	}
+
+	pub fn drop(&mut self) {
+		unsafe {
+			DeleteObject(self.hfont);
 		}
 	}
 
@@ -252,8 +281,12 @@ impl App {
 				WM_SIZE => {
 					self.on_size(window, message, wparam, lparam)
 				}
+				WM_DROPFILES => {
+					self.on_drop_files(window, message, wparam, lparam)
+				}
 				WM_DESTROY => {
 					println!("WM_DESTROY");
+					self.drop();
 					PostQuitMessage(0);
 					LRESULT(0)
 				}
@@ -298,6 +331,8 @@ impl App {
 			);
 			// EditControlにフォント指定
 			SendMessageW(self.hwnd_edit, WM_SETFONT, WPARAM(self.hfont.0 as usize), LPARAM(1));
+			// サブクラス化
+			let ret = SetWindowSubclass(self.hwnd_edit, Some(wndproc_edit), 0, 0);
 		}
 
 		LRESULT(0)
@@ -323,6 +358,71 @@ impl App {
 		LRESULT(0)
 	}
 
+	fn on_drop_files(&mut self, window: HWND, message: u32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
+		println!("WM_DROPFILES");
+
+		unsafe {
+			// D&Dされたファイル数を取得
+			let hdrop = HDROP(wparam.0 as isize);
+			let file_num = DragQueryFileW(hdrop, 0xFFFFFFFF, PWSTR(std::ptr::null_mut()), 0);
+			// ファイルパス取得
+			let mut dd_len: usize = 1;
+			let mut dd_path :Vec<Vec<u16>> = Vec::with_capacity(file_num as usize);
+			for i in 0..file_num {
+				// パス取得
+				let path_len = DragQueryFileW(hdrop, i, PWSTR(self.dd_buff.as_mut_ptr()), self.dd_buff.len() as u32);
+				// バッファにコピー
+				dd_path.push(self.dd_buff[0..path_len as usize].to_vec());
+				// コピーしたバイト数をカウント
+				dd_len += path_len as usize;
+			}
+			// D&D 処理終了
+			DragFinish(hdrop);
+
+			// EditCtrlにテキストを送信
+			// 改行コード分を加算
+			dd_len += ((file_num - 1) * 2) as usize;
+			// 送信データを作成
+			let mut send: Vec<u16> = Vec::with_capacity(dd_len);
+			send.append(&mut dd_path[0]);
+			for i in 1..file_num {
+				// 改行追加
+				send.push(*resource::UTF16_CR.get().unwrap());
+				send.push(*resource::UTF16_LF.get().unwrap());
+				// パス追加
+				send.append(&mut dd_path[i as usize]);
+			}
+			// 末尾にNULL文字追加
+			send.push(*resource::UTF16_NULL.get().unwrap());
+			// EditCtrl内テキスト全体の長さを取得
+			let whole_len = SendMessageW(self.hwnd_edit, WM_GETTEXTLENGTH, WPARAM(0),LPARAM(0));
+			if whole_len.0 > 0 {
+				// カーソルを一番最後に配置
+				SendMessageW(self.hwnd_edit, EM_SETSEL, WPARAM(whole_len.0 as usize),LPARAM(whole_len.0 as isize));
+				// 改行挿入
+				SendMessageW(self.hwnd_edit, EM_REPLACESEL, WPARAM(0xFFFFFFFF),LPARAM(UTF16_CRLF.get().unwrap().as_pwstr().0 as isize));
+			} else {
+				// テキストが無ければ何もしない
+			}
+			// パスを追加
+			SendMessageW(self.hwnd_edit, EM_REPLACESEL, WPARAM(0xFFFFFFFF),LPARAM(send.as_ptr() as isize));
+		}
+
+		LRESULT(0)
+	}
+
+	pub fn wndproc_edit(&mut self, window: HWND, message: u32, wparam: WPARAM, lparam: LPARAM, uidsubclass: usize, dwrefdata: usize) -> LRESULT {
+		unsafe {
+			match message {
+				WM_DROPFILES => {
+					self.on_drop_files(window, message, wparam, lparam);
+				}
+				_ => ()
+			}
+			DefSubclassProc(window, message, wparam, lparam)
+		}
+	}
+
 }
 
 
@@ -332,6 +432,17 @@ extern "system" fn wndproc(window: HWND, message: u32, wparam: WPARAM, lparam: L
 	//INSTANCE.lock().unwrap().wndproc(window, message, wparam, lparam)
 	unsafe {
 		INSTANCE.get_mut().unwrap().wndproc(window, message, wparam, lparam)
+	}
+	// INSTANCE2.with(|app_ref| -> LRESULT {
+	// 	let mut app = app_ref.borrow_mut();
+	// 	return app.wndproc(window, message, wparam, lparam)
+	// })
+}
+
+extern "system" fn wndproc_edit(window: HWND, message: u32, wparam: WPARAM, lparam: LPARAM, uidsubclass: usize, dwrefdata: usize) -> LRESULT {
+	//INSTANCE.lock().unwrap().wndproc(window, message, wparam, lparam)
+	unsafe {
+		INSTANCE.get_mut().unwrap().wndproc_edit(window, message, wparam, lparam, uidsubclass, dwrefdata)
 	}
 	// INSTANCE2.with(|app_ref| -> LRESULT {
 	// 	let mut app = app_ref.borrow_mut();
