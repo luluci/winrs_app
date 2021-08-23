@@ -1,8 +1,29 @@
+
 mod winrs {
 	pub use bindings::{
 		Windows::Win32::Foundation::{
-			PWSTR, LPARAM,
+			HWND, PWSTR, LPARAM, WPARAM, HANDLE, 
 		},
+		Windows::Win32::UI::WindowsAndMessaging::{
+			GetMessageW, PeekMessageW, SendMessageW,
+	
+			// Apis
+			WM_GETTEXTLENGTH, WM_GETTEXT, 
+
+		},
+		Windows::Win32::UI::Shell::{
+			StrCpyW, 
+		},
+		Windows::Win32::System::Memory::{
+			GlobalAlloc, GlobalLock, GlobalUnlock, GlobalFree, 
+			GHND, 
+		},
+		Windows::Win32::System::DataExchange::{
+			OpenClipboard, EmptyClipboard, SetClipboardData, CloseClipboard, 
+		},
+		Windows::Win32::System::SystemServices::{
+			CF_UNICODETEXT,
+		}
 	};
 }
 
@@ -120,4 +141,61 @@ impl WndCoord {
 
 pub fn lparam2size(lparam: winrs::LPARAM) {
 	let width = lparam.0 & 0x0000FFFF;
+}
+
+pub fn wparam2command_button(wparam: winrs::WPARAM) -> (usize, usize) {
+	let child_id = wparam.0 & 0x00000000FFFFFFFF as usize;
+	let notify = (wparam.0 & 0xFFFFFFFF00000000) >> 32 as usize;
+	(notify, child_id)
+}
+
+pub fn set_clipboard(buff: *mut u16, size: usize) {
+	unsafe {
+		// HGLOBALの定義がない
+		let h_data = winrs::GlobalAlloc(winrs::GHND, (size+1)*2);
+		let p_data = winrs::GlobalLock(h_data);
+		if p_data.is_null() {
+			println!("failed GlobalLock.");
+			winrs::GlobalUnlock(h_data);
+			return;
+		}
+		{
+			let ptr_dst = p_data as *mut u16;
+			let ptr_src = buff as *const u16;
+			let mut data: u16;
+			for count in 0..size {
+				let idx: isize = count as isize;
+				data = ptr_src.offset(idx + 0).read();
+				ptr_dst.offset(idx + 0).write_unaligned(data);
+			}
+		};
+		//let str_dst = winrs::PWSTR(p_data as *mut u16);
+		//let str_src = winrs::PWSTR(buff as *mut u16);
+		//winrs::StrCpyW(str_dst, str_src);
+		winrs::GlobalUnlock(h_data);
+		// 
+		let op = winrs::OpenClipboard(winrs::HWND(0));
+		if op.as_bool() {
+			winrs::EmptyClipboard();
+			let set_result = winrs::SetClipboardData(winrs::CF_UNICODETEXT.0, winrs::HANDLE(h_data));
+			if set_result.is_null() {
+				winrs::GlobalFree(h_data);
+			}
+			winrs::CloseClipboard();
+		}
+	}
+}
+
+pub fn edit_get_text(hwnd: winrs::HWND, buff: *mut u16, size: usize) -> usize {
+	unsafe {
+		// バッファにEditControlの内容をコピー
+		// 返り値は\0を含まないコピー文字数
+		let whole_len = winrs::SendMessageW(
+			hwnd, winrs::WM_GETTEXT,
+			winrs::WPARAM(size),
+			winrs::LPARAM(buff as isize)
+		);
+
+		whole_len.0 as usize
+	}
 }

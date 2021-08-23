@@ -10,8 +10,8 @@ fn main() {
 			GetClientRect, MoveWindow, 
 			MSG, WNDCLASSW, HMENU, CREATESTRUCTW, 
 			CW_USEDEFAULT,
-			WM_DESTROY, WM_PAINT, WM_CREATE, WM_QUIT, WM_SIZE, WM_SETFONT, WM_DROPFILES, 
-			WM_GETTEXTLENGTH, 
+			WM_DESTROY, WM_PAINT, WM_CREATE, WM_QUIT, WM_SIZE, WM_SETFONT, WM_DROPFILES, WM_COMMAND, 
+			WM_GETTEXTLENGTH, WM_GETTEXT, 
 			LoadCursorW, IDC_ARROW,
 			WINDOW_STYLE, WINDOW_EX_STYLE,
 			ES_AUTOHSCROLL, ES_MULTILINE,
@@ -30,13 +30,14 @@ fn main() {
 		Windows::Win32::UI::Shell::{
 			SetWindowSubclass, DefSubclassProc, 
 			HDROP, DragQueryFileW, DragFinish, 
+			StrCpyW, 
 		},
 		Windows::Win32::System::LibraryLoader::{
 			GetModuleHandleW
 		},
 		Windows::Win32::Foundation::{
 			HWND, LPARAM, WPARAM, HINSTANCE, LRESULT, PWSTR,
-			RECT,
+			RECT, HANDLE, 
 		},
 		Windows::Win32::Graphics::Gdi::{
 			ValidateRect, GetStockObject, UpdateWindow, DeleteObject, 
@@ -44,5 +45,15 @@ fn main() {
 			HGDIOBJ,
 			HFONT, CreateFontW, FW_NORMAL, SHIFTJIS_CHARSET, FONT_OUTPUT_PRECISION, FONT_CLIP_PRECISION, FONT_QUALITY, FONT_PITCH_AND_FAMILY, 
 		},
+		Windows::Win32::System::Memory::{
+			GlobalAlloc, GlobalLock, GlobalUnlock, GlobalFree, 
+			GLOBAL_ALLOC_FLAGS, 
+		},
+		Windows::Win32::System::DataExchange::{
+			OpenClipboard, EmptyClipboard, SetClipboardData, CloseClipboard, 
+		},
+		Windows::Win32::System::SystemServices::{
+			CLIPBOARD_FORMATS,
+		}
 	);
 }

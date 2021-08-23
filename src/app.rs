@@ -13,7 +13,7 @@ use bindings::{
 		GetClientRect, MoveWindow, 
 		MSG, WNDCLASSW, HMENU, CREATESTRUCTW, CW_USEDEFAULT,
 		// Apis
-		WM_DESTROY, WM_PAINT, WM_CREATE, WM_QUIT, WM_SIZE, WM_GETTEXTLENGTH, 
+		WM_DESTROY, WM_PAINT, WM_CREATE, WM_QUIT, WM_SIZE, WM_GETTEXTLENGTH, WM_COMMAND, 
 		WINDOW_STYLE,
 		WS_OVERLAPPEDWINDOW, WS_VISIBLE, WS_CHILDWINDOW, WS_CHILD, WS_BORDER, WS_VSCROLL, WM_SETFONT, WM_DROPFILES, 
 		WS_CLIPCHILDREN, WS_CLIPSIBLINGS, 
@@ -69,6 +69,9 @@ mod resource {
 	// EDIT window info
 	pub static EDIT_CLASS_NAME: OnceCell<winrs_util::WSTR> = OnceCell::new();
 	pub static EDIT_DEF_STR: OnceCell<winrs_util::WSTR> = OnceCell::new();
+	// BUTTON window info
+	pub static BUTTON_CLASS_NAME: OnceCell<winrs_util::WSTR> = OnceCell::new();
+	pub static BUTTON_DISP: OnceCell<winrs_util::WSTR> = OnceCell::new();
 	// 
 	pub static UTF16_CR: OnceCell<u16> = OnceCell::new();
 	pub static UTF16_LF: OnceCell<u16> = OnceCell::new();
@@ -80,6 +83,8 @@ mod resource {
 		WND_TITLE.set(winrs_util::WSTR::new("Win32 App\0"));
 		EDIT_CLASS_NAME.set(winrs_util::WSTR::new("EDIT\0"));
 		EDIT_DEF_STR.set(winrs_util::WSTR::new("初期テキスト\0"));
+		BUTTON_CLASS_NAME.set(winrs_util::WSTR::new("BUTTON\0"));
+		BUTTON_DISP.set(winrs_util::WSTR::new("クリップボードにコピー\0"));
 		UTF16_CR.set("\r".encode_utf16().next().unwrap());
 		UTF16_LF.set("\n".encode_utf16().next().unwrap());
 		UTF16_CRLF.set(winrs_util::WSTR::new("\r\n\0"));
@@ -131,13 +136,16 @@ struct App {
 //	wnd_proc: Option<unsafe extern "system" fn(HWND, u32, WPARAM, LPARAM) -> LRESULT>,
 	wndclass_atom: u16,
 	coord: winrs_util::WndCoord,
-	// ChildWindow: EditCtrl
-	hwnd_edit: HWND,
+	// ChildWindow:
+	hwnd_edit: HWND,	// EditCtrl
+	hwnd_btn: HWND,		// Button Ctrl
 	// Font
 	hfont: HFONT,
 	font_face: winrs_util::WSTR,
 	// Drag & Drop
-	dd_buff: [u16;256],
+	dd_buff: [u16;512],
+	// Buffer: GETTEXT
+	gettext_buff: [u16;2048],
 }
 
 impl App {
@@ -153,11 +161,14 @@ impl App {
 			coord: winrs_util::WndCoord::new(0,0,0,0),
 			// ChildWindow: EditCtrl
 			hwnd_edit: HWND::default(),
+			hwnd_btn: HWND::default(),
 			// Font
 			hfont: HFONT::default(),
 			font_face: winrs_util::WSTR::new("Meiryo UI\0"),
 			// Drag & Drop
-			dd_buff: [0; 256],
+			dd_buff: [0; 512],
+			// Buffer: GETTEXT
+			gettext_buff: [0; 2048],
 		}
 	}
 
@@ -284,6 +295,9 @@ impl App {
 				WM_DROPFILES => {
 					self.on_drop_files(window, message, wparam, lparam)
 				}
+				WM_COMMAND => {
+					self.on_command(window, message, wparam, lparam)
+				}
 				WM_DESTROY => {
 					println!("WM_DESTROY");
 					self.drop();
@@ -305,6 +319,7 @@ impl App {
 			let icc = INITCOMMONCONTROLSEX::default();
 			InitCommonControlsEx(&icc);
 
+			// Edit Control 作成
 			let mut rect: RECT = RECT::default();
 			let res = GetClientRect(window, &mut rect );
 			self.coord.update_root(rect.left, rect.top, rect.right, rect.bottom);
@@ -333,6 +348,24 @@ impl App {
 			SendMessageW(self.hwnd_edit, WM_SETFONT, WPARAM(self.hfont.0 as usize), LPARAM(1));
 			// サブクラス化
 			let ret = SetWindowSubclass(self.hwnd_edit, Some(wndproc_edit), 0, 0);
+
+			// Button Control 作成 
+			self.hwnd_btn = CreateWindowExW(
+				WS_EX_ACCEPTFILES,
+				resource::BUTTON_CLASS_NAME.get().unwrap().as_pwstr(),
+				resource::BUTTON_DISP.get().unwrap().as_pwstr(),
+				WS_CHILD | WS_VISIBLE,
+				5,
+				5,
+				200,
+				20,
+				window,
+				HMENU(1),					// 子ウィンドウのIDになる
+				(*cs).hInstance,
+				std::ptr::null_mut(),
+			);
+			// EditControlにフォント指定
+			SendMessageW(self.hwnd_btn, WM_SETFONT, WPARAM(self.hfont.0 as usize), LPARAM(1));
 		}
 
 		LRESULT(0)
@@ -410,6 +443,28 @@ impl App {
 
 		LRESULT(0)
 	}
+
+	fn on_command(&mut self, window: HWND, message: u32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
+		// println!("WM_COMMAND");
+		// println!("WPARAM size: {}", std::mem::size_of_val(&wparam)); -> 8 byte
+
+		unsafe {
+			let child_hwnd = HWND(lparam.0);
+			let (notify, child_id) = winrs_util::wparam2command_button(wparam);
+
+			if child_hwnd == self.hwnd_btn {
+				// バッファ末尾を必ず\0にするためにバッファイサイズは-1して渡す
+				let text_len = winrs_util::edit_get_text(self.hwnd_edit, self.gettext_buff.as_mut_ptr(), 2048-1);
+				winrs_util::set_clipboard(self.gettext_buff.as_mut_ptr(), text_len);
+				LRESULT(0)
+			} else if child_hwnd == self.hwnd_edit {
+				DefSubclassProc(window, message, wparam, lparam)
+			} else {
+				LRESULT(0)
+			}
+		}
+	}
+
 
 	pub fn wndproc_edit(&mut self, window: HWND, message: u32, wparam: WPARAM, lparam: LPARAM, uidsubclass: usize, dwrefdata: usize) -> LRESULT {
 		unsafe {
